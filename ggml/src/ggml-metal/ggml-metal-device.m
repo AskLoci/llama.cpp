@@ -381,6 +381,82 @@ static bool ggml_metal_library_compile_all(
     return ok;
 }
 
+#if GGML_METAL_EMBED_PRECOMPILED
+// load the libraries compiled at build time for the macro set of this device (bf16 or bf16 + tensor)
+// returns false without changing res if there is no match or a library does not load
+static bool ggml_metal_library_load_precompiled(ggml_metal_library_t res, id<MTLDevice> device,
+                                                const struct ggml_metal_device_props * props) {
+    // the tensor library targets macOS 26.2 (see CMakeLists.txt)
+    const bool tensor_os = [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion) { 26, 2, 0 }];
+    if (!props->has_bfloat || (props->has_tensor && !tensor_os)) {
+        return false;
+    }
+
+#define X(e, s) extern const char ggml_metallib_##s##_bf16_start[];   extern const char ggml_metallib_##s##_bf16_end[]; \
+                extern const char ggml_metallib_##s##_tensor_start[]; extern const char ggml_metallib_##s##_tensor_end[];
+    GGML_METAL_LIBS
+#undef X
+
+    static const char * const bf16_start[GGML_METAL_LIB_COUNT] = {
+#define X(e, s) [GGML_METAL_LIB_##e] = ggml_metallib_##s##_bf16_start,
+    GGML_METAL_LIBS
+#undef X
+    };
+    static const char * const bf16_end[GGML_METAL_LIB_COUNT] = {
+#define X(e, s) [GGML_METAL_LIB_##e] = ggml_metallib_##s##_bf16_end,
+    GGML_METAL_LIBS
+#undef X
+    };
+    static const char * const tensor_start[GGML_METAL_LIB_COUNT] = {
+#define X(e, s) [GGML_METAL_LIB_##e] = ggml_metallib_##s##_tensor_start,
+    GGML_METAL_LIBS
+#undef X
+    };
+    static const char * const tensor_end[GGML_METAL_LIB_COUNT] = {
+#define X(e, s) [GGML_METAL_LIB_##e] = ggml_metallib_##s##_tensor_end,
+    GGML_METAL_LIBS
+#undef X
+    };
+
+    const char * const * lib_start = props->has_tensor ? tensor_start : bf16_start;
+    const char * const * lib_end   = props->has_tensor ? tensor_end   : bf16_end;
+    const char * variant           = props->has_tensor ? "tensor"     : "bf16";
+
+    const int64_t t_start = ggml_time_us();
+
+    id<MTLLibrary> libs[GGML_METAL_LIB_COUNT] = { nil };
+
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        NSError * error = nil;
+
+        // the data lives in the binary, so do not copy it
+        dispatch_data_t data = dispatch_data_create(lib_start[kind], lib_end[kind] - lib_start[kind], NULL, ^{});
+        libs[kind] = [device newLibraryWithData:data error:&error];
+        dispatch_release(data);
+
+        if (!libs[kind]) {
+            GGML_LOG_WARN("%s: the precompiled '%s' library (%s) did not load, compiling the sources: %s\n",
+                          __func__, k_lib_names[kind], variant, [[error description] UTF8String]);
+            for (int i = 0; i < kind; ++i) {
+                [libs[i] release];
+            }
+            return false;
+        }
+    }
+
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        res->objs[kind] = libs[kind];
+    }
+
+    ggml_metal_library_build_index(res);
+
+    GGML_LOG_INFO("%s: loaded %d precompiled %s libraries in %.3f sec\n",
+                  __func__, GGML_METAL_LIB_COUNT, variant, (ggml_time_us() - t_start) / 1e6);
+
+    return true;
+}
+#endif
+
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     id<MTLDevice> device = ggml_metal_device_get_obj(dev);
 
@@ -419,6 +495,12 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     GGML_METAL_LIBS
 #undef X
     };
+
+#if GGML_METAL_EMBED_PRECOMPILED
+    if (ggml_metal_library_load_precompiled(res, device, ggml_metal_device_get_props(dev))) {
+        return res;
+    }
+#endif
 
     const bool ok = ggml_metal_library_compile_all(res, device, prep,
         ^NSString * (int kind, NSError ** err) {
