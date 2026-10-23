@@ -3375,8 +3375,8 @@ static block_q1_0x4 make_block_q1_0x4(block_q1_0 * in, unsigned int blck_size_in
 
 // Interleave 4 block_q2_0s (64 weights each) into one block_q2_0x4.
 // Each 16-byte chunk v covers k = 16v..16v+15 of all 4 rows: byte 4r+b, 2-bit field p
-// holds weight k = 16v + 4p + b of row r, so one shift pair per field yields the 4 rows'
-// weights for 4 consecutive k, matching a Q8_0 activation chunk lane for lane in a dot product.
+// holds weight k = 16v + 4p + b of row r, so extracting one field from every byte yields the
+// 4 rows' weights for 4 consecutive k, matching a Q8_0 activation chunk lane for lane in a dot product.
 // Q2_0 codes map to {-1, 0, 1, 2}; the field stores the negation (1 - q), which fits a
 // signed 2-bit value, and the scale is negated to compensate.
 static block_q2_0x4 make_block_q2_0x4(const block_q2_0 * in, unsigned int blck_size_interleave) {
@@ -3406,8 +3406,8 @@ static block_q2_0x4 make_block_q2_0x4(const block_q2_0 * in, unsigned int blck_s
 }
 
 // Interleave 8 variant for the int8 matrix-multiply (i8mm) kernels: each 16-byte chunk holds
-// one row pair over 32 k: byte 8rr+b, field p = weight k = 32v + 8p + b of row 2rp+rr, so a
-// shift pair per field yields a 2-row x 8-k operand for smmla. Same negated codes as above.
+// one row pair over 32 k: byte 8rr+b, field p = weight k = 32v + 8p + b of row 2rp+rr, so
+// extracting one field per byte yields a 2-row x 8-k operand for smmla. Same negated codes as above.
 static block_q2_0x4 make_block_q2_0x4_i8(const block_q2_0 * in) {
     block_q2_0x4 out;
 
