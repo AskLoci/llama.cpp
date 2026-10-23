@@ -1841,6 +1841,33 @@ void ggml_gemv_q8_0_4x8_q8_0(int                        n,
     ggml_gemv_q8_0_4x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
 
+
+// Q2_0 unpack through nibble tables: a nibble holds two 2-bit fields, one table sign-extends
+// the low field and the other the high field, so the two nibbles of a byte give its four
+// fields with one and, one shift and four table lookups. Shift pairs per field were slower
+// on Cortex-A78/A55 (one shift pipe).
+static inline int8x16_t ggml_q2_0_tbl_lo(void) {
+    static const int8_t t[16] = { 0, 1, -2, -1, 0, 1, -2, -1, 0, 1, -2, -1, 0, 1, -2, -1 };
+    return vld1q_s8(t);
+}
+
+static inline int8x16_t ggml_q2_0_tbl_hi(void) {
+    static const int8_t t[16] = { 0, 0, 0, 0, 1, 1, 1, 1, -2, -2, -2, -2, -1, -1, -1, -1 };
+    return vld1q_s8(t);
+}
+
+// val[p] holds field p of every byte of raw
+static inline int8x16x4_t ggml_q2_0_unpack(int8x16_t raw, int8x16_t tbl_lo, int8x16_t tbl_hi) {
+    const uint8x16_t lo = vandq_u8(vreinterpretq_u8_s8(raw), vdupq_n_u8(0x0F));
+    const uint8x16_t hi = vshrq_n_u8(vreinterpretq_u8_s8(raw), 4);
+    int8x16x4_t w;
+    w.val[0] = vqtbl1q_s8(tbl_lo, lo);
+    w.val[1] = vqtbl1q_s8(tbl_hi, lo);
+    w.val[2] = vqtbl1q_s8(tbl_lo, hi);
+    w.val[3] = vqtbl1q_s8(tbl_hi, hi);
+    return w;
+}
+
 void ggml_gemv_q2_0_4x4_q8_0(int                        n,
                              float * GGML_RESTRICT      s,
                              size_t                     bs,
@@ -1859,6 +1886,8 @@ void ggml_gemv_q2_0_4x4_q8_0(int                        n,
     UNUSED(ncols_interleaved);
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    const int8x16_t tbl_lo = ggml_q2_0_tbl_lo();
+    const int8x16_t tbl_hi = ggml_q2_0_tbl_hi();
     for (int c = 0; c < nc; c += ncols_interleaved) {
         const block_q2_0x4 * b_ptr = (const block_q2_0x4 *) vx + (c / ncols_interleaved) * nb;
         const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
@@ -1881,14 +1910,18 @@ void ggml_gemv_q2_0_4x4_q8_0(int                        n,
                 int32x4_t ret0 = vdupq_n_s32(0);
                 int32x4_t ret1 = vdupq_n_s32(0);
 
-                ret0 = vdotq_laneq_s32(ret0, vshrq_n_s8(vshlq_n_s8(raw0, 6), 6), a0, 0);
-                ret1 = vdotq_laneq_s32(ret1, vshrq_n_s8(vshlq_n_s8(raw1, 6), 6), a1, 0);
-                ret0 = vdotq_laneq_s32(ret0, vshrq_n_s8(vshlq_n_s8(raw0, 4), 6), a0, 1);
-                ret1 = vdotq_laneq_s32(ret1, vshrq_n_s8(vshlq_n_s8(raw1, 4), 6), a1, 1);
-                ret0 = vdotq_laneq_s32(ret0, vshrq_n_s8(vshlq_n_s8(raw0, 2), 6), a0, 2);
-                ret1 = vdotq_laneq_s32(ret1, vshrq_n_s8(vshlq_n_s8(raw1, 2), 6), a1, 2);
-                ret0 = vdotq_laneq_s32(ret0, vshrq_n_s8(raw0, 6), a0, 3);
-                ret1 = vdotq_laneq_s32(ret1, vshrq_n_s8(raw1, 6), a1, 3);
+                const int8x16x4_t wq0 = ggml_q2_0_unpack(raw0, tbl_lo, tbl_hi);
+
+
+                const int8x16x4_t wq1 = ggml_q2_0_unpack(raw1, tbl_lo, tbl_hi);
+                ret0 = vdotq_laneq_s32(ret0, wq0.val[0], a0, 0);
+                ret1 = vdotq_laneq_s32(ret1, wq1.val[0], a1, 0);
+                ret0 = vdotq_laneq_s32(ret0, wq0.val[1], a0, 1);
+                ret1 = vdotq_laneq_s32(ret1, wq1.val[1], a1, 1);
+                ret0 = vdotq_laneq_s32(ret0, wq0.val[2], a0, 2);
+                ret1 = vdotq_laneq_s32(ret1, wq1.val[2], a1, 2);
+                ret0 = vdotq_laneq_s32(ret0, wq0.val[3], a0, 3);
+                ret1 = vdotq_laneq_s32(ret1, wq1.val[3], a1, 3);
 
                 accb = vfmaq_n_f32(accb, vcvtq_f32_s32(vaddq_s32(ret0, ret1)), ad);
             }
@@ -1920,6 +1953,8 @@ void ggml_gemv_q2_0_4x8_q8_0(int                        n,
     UNUSED(ncols_interleaved);
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    const int8x16_t tbl_lo = ggml_q2_0_tbl_lo();
+    const int8x16_t tbl_hi = ggml_q2_0_tbl_hi();
     for (int c = 0; c < nc; c += ncols_interleaved) {
         const block_q2_0x4 * b_ptr = (const block_q2_0x4 *) vx + (c / ncols_interleaved) * nb;
         const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
@@ -1946,14 +1981,18 @@ void ggml_gemv_q2_0_4x8_q8_0(int                        n,
                 int32x4_t ret0 = vdupq_n_s32(0);
                 int32x4_t ret1 = vdupq_n_s32(0);
 
-                ret0 = vdotq_s32(ret0, vshrq_n_s8(vshlq_n_s8(raw0, 6), 6), a0);
-                ret1 = vdotq_s32(ret1, vshrq_n_s8(vshlq_n_s8(raw1, 6), 6), a0);
-                ret0 = vdotq_s32(ret0, vshrq_n_s8(vshlq_n_s8(raw0, 4), 6), a1);
-                ret1 = vdotq_s32(ret1, vshrq_n_s8(vshlq_n_s8(raw1, 4), 6), a1);
-                ret0 = vdotq_s32(ret0, vshrq_n_s8(vshlq_n_s8(raw0, 2), 6), a2);
-                ret1 = vdotq_s32(ret1, vshrq_n_s8(vshlq_n_s8(raw1, 2), 6), a2);
-                ret0 = vdotq_s32(ret0, vshrq_n_s8(raw0, 6), a3);
-                ret1 = vdotq_s32(ret1, vshrq_n_s8(raw1, 6), a3);
+                const int8x16x4_t wq0 = ggml_q2_0_unpack(raw0, tbl_lo, tbl_hi);
+
+
+                const int8x16x4_t wq1 = ggml_q2_0_unpack(raw1, tbl_lo, tbl_hi);
+                ret0 = vdotq_s32(ret0, wq0.val[0], a0);
+                ret1 = vdotq_s32(ret1, wq1.val[0], a0);
+                ret0 = vdotq_s32(ret0, wq0.val[1], a1);
+                ret1 = vdotq_s32(ret1, wq1.val[1], a1);
+                ret0 = vdotq_s32(ret0, wq0.val[2], a2);
+                ret1 = vdotq_s32(ret1, wq1.val[2], a2);
+                ret0 = vdotq_s32(ret0, wq0.val[3], a3);
+                ret1 = vdotq_s32(ret1, wq1.val[3], a3);
 
                 // ret0 = {r0 lo, r0 hi, r1 lo, r1 hi}, ret1 = {r2 lo, r2 hi, r3 lo, r3 hi}
                 accb = vfmaq_n_f32(accb, vcvtq_f32_s32(vpaddq_s32(ret0, ret1)), ad);
@@ -5445,7 +5484,114 @@ void ggml_gemm_q2_0_4x4_q8_0(int                        n,
     UNUSED(ncols_interleaved);
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
-    for (int y = 0; y < nr / 4; y++) {
+    const int8x16_t tbl_lo = ggml_q2_0_tbl_lo();
+    const int8x16_t tbl_hi = ggml_q2_0_tbl_hi();
+    const int nyb = nr / 4;
+    int y = 0;
+    // 8-token tiles: one weight unpack feeds two 4-token activation blocks
+    for (; y + 1 < nyb; y += 2) {
+        const block_q8_0x4 * a_ptr0 = (const block_q8_0x4 *) vy + ((QK2_0 / QK8_0) * y * nb);
+        const block_q8_0x4 * a_ptr1 = a_ptr0 + (QK2_0 / QK8_0) * nb;
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_q2_0x4 * b_ptr = (const block_q2_0x4 *) vx + (x * nb);
+
+            float32x4_t sumf[8];
+            for (int m = 0; m < 8; m++) {
+                sumf[m] = vdupq_n_f32(0);
+            }
+
+            for (int l = 0; l < nb; l++) {
+                const float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *) b_ptr[l].d));
+
+                for (int k = 0; k < QK2_0 / QK8_0; ++k) {
+                    const block_q8_0x4 * GGML_RESTRICT a_blk0 = a_ptr0 + (QK2_0 / QK8_0) * l + k;
+                    const block_q8_0x4 * GGML_RESTRICT a_blk1 = a_ptr1 + (QK2_0 / QK8_0) * l + k;
+                    const int8_t * GGML_RESTRICT b_qs = (const int8_t *) b_ptr[l].qs + 32 * k;
+
+                    int32x4_t sumi[8];
+                    for (int m = 0; m < 8; m++) {
+                        sumi[m] = vdupq_n_s32(0);
+                    }
+
+                    for (int h = 0; h < 2; ++h) {
+                        const int8x16_t raw = vld1q_s8(b_qs + 16 * h);
+                        const int8x16x4_t wq = ggml_q2_0_unpack(raw, tbl_lo, tbl_hi);
+
+                        const int8x16_t w0 = wq.val[0];
+
+                        const int8x16_t w1 = wq.val[1];
+
+                        const int8x16_t w2 = wq.val[2];
+
+                        const int8x16_t w3 = wq.val[3];
+
+                        {
+                            const int8x16_t a0 = vld1q_s8(a_blk0->qs + 64 * h);
+                            const int8x16_t a1 = vld1q_s8(a_blk0->qs + 64 * h + 16);
+                            const int8x16_t a2 = vld1q_s8(a_blk0->qs + 64 * h + 32);
+                            const int8x16_t a3 = vld1q_s8(a_blk0->qs + 64 * h + 48);
+                            sumi[0] = vdotq_laneq_s32(sumi[0], w0, a0, 0);
+                            sumi[1] = vdotq_laneq_s32(sumi[1], w0, a0, 1);
+                            sumi[2] = vdotq_laneq_s32(sumi[2], w0, a0, 2);
+                            sumi[3] = vdotq_laneq_s32(sumi[3], w0, a0, 3);
+                            sumi[0] = vdotq_laneq_s32(sumi[0], w1, a1, 0);
+                            sumi[1] = vdotq_laneq_s32(sumi[1], w1, a1, 1);
+                            sumi[2] = vdotq_laneq_s32(sumi[2], w1, a1, 2);
+                            sumi[3] = vdotq_laneq_s32(sumi[3], w1, a1, 3);
+                            sumi[0] = vdotq_laneq_s32(sumi[0], w2, a2, 0);
+                            sumi[1] = vdotq_laneq_s32(sumi[1], w2, a2, 1);
+                            sumi[2] = vdotq_laneq_s32(sumi[2], w2, a2, 2);
+                            sumi[3] = vdotq_laneq_s32(sumi[3], w2, a2, 3);
+                            sumi[0] = vdotq_laneq_s32(sumi[0], w3, a3, 0);
+                            sumi[1] = vdotq_laneq_s32(sumi[1], w3, a3, 1);
+                            sumi[2] = vdotq_laneq_s32(sumi[2], w3, a3, 2);
+                            sumi[3] = vdotq_laneq_s32(sumi[3], w3, a3, 3);
+                        }
+                        {
+                            const int8x16_t a0 = vld1q_s8(a_blk1->qs + 64 * h);
+                            const int8x16_t a1 = vld1q_s8(a_blk1->qs + 64 * h + 16);
+                            const int8x16_t a2 = vld1q_s8(a_blk1->qs + 64 * h + 32);
+                            const int8x16_t a3 = vld1q_s8(a_blk1->qs + 64 * h + 48);
+                            sumi[4] = vdotq_laneq_s32(sumi[4], w0, a0, 0);
+                            sumi[5] = vdotq_laneq_s32(sumi[5], w0, a0, 1);
+                            sumi[6] = vdotq_laneq_s32(sumi[6], w0, a0, 2);
+                            sumi[7] = vdotq_laneq_s32(sumi[7], w0, a0, 3);
+                            sumi[4] = vdotq_laneq_s32(sumi[4], w1, a1, 0);
+                            sumi[5] = vdotq_laneq_s32(sumi[5], w1, a1, 1);
+                            sumi[6] = vdotq_laneq_s32(sumi[6], w1, a1, 2);
+                            sumi[7] = vdotq_laneq_s32(sumi[7], w1, a1, 3);
+                            sumi[4] = vdotq_laneq_s32(sumi[4], w2, a2, 0);
+                            sumi[5] = vdotq_laneq_s32(sumi[5], w2, a2, 1);
+                            sumi[6] = vdotq_laneq_s32(sumi[6], w2, a2, 2);
+                            sumi[7] = vdotq_laneq_s32(sumi[7], w2, a2, 3);
+                            sumi[4] = vdotq_laneq_s32(sumi[4], w3, a3, 0);
+                            sumi[5] = vdotq_laneq_s32(sumi[5], w3, a3, 1);
+                            sumi[6] = vdotq_laneq_s32(sumi[6], w3, a3, 2);
+                            sumi[7] = vdotq_laneq_s32(sumi[7], w3, a3, 3);
+                        }
+                    }
+
+                    const float32x4_t a_d0 = vcvt_f32_f16(vld1_f16((const float16_t *) a_blk0->d));
+                    const float32x4_t a_d1 = vcvt_f32_f16(vld1_f16((const float16_t *) a_blk1->d));
+                    sumf[0] = vfmaq_f32(sumf[0], vcvtq_f32_s32(sumi[0]), vmulq_laneq_f32(b_d, a_d0, 0));
+                    sumf[1] = vfmaq_f32(sumf[1], vcvtq_f32_s32(sumi[1]), vmulq_laneq_f32(b_d, a_d0, 1));
+                    sumf[2] = vfmaq_f32(sumf[2], vcvtq_f32_s32(sumi[2]), vmulq_laneq_f32(b_d, a_d0, 2));
+                    sumf[3] = vfmaq_f32(sumf[3], vcvtq_f32_s32(sumi[3]), vmulq_laneq_f32(b_d, a_d0, 3));
+                    sumf[4] = vfmaq_f32(sumf[4], vcvtq_f32_s32(sumi[4]), vmulq_laneq_f32(b_d, a_d1, 0));
+                    sumf[5] = vfmaq_f32(sumf[5], vcvtq_f32_s32(sumi[5]), vmulq_laneq_f32(b_d, a_d1, 1));
+                    sumf[6] = vfmaq_f32(sumf[6], vcvtq_f32_s32(sumi[6]), vmulq_laneq_f32(b_d, a_d1, 2));
+                    sumf[7] = vfmaq_f32(sumf[7], vcvtq_f32_s32(sumi[7]), vmulq_laneq_f32(b_d, a_d1, 3));
+                }
+            }
+
+            for (int m = 0; m < 4; m++) {
+                vst1q_f32(s + (y * 4 + m) * bs + x * 4, sumf[m]);
+                vst1q_f32(s + ((y + 1) * 4 + m) * bs + x * 4, sumf[4 + m]);
+            }
+        }
+    }
+    // remaining 4-token block
+    for (; y < nyb; y++) {
         const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + ((QK2_0 / QK8_0) * y * nb);
         for (int x = 0; x < nc / ncols_interleaved; x++) {
             const block_q2_0x4 * b_ptr = (const block_q2_0x4 *) vx + (x * nb);
@@ -5457,15 +5603,10 @@ void ggml_gemm_q2_0_4x4_q8_0(int                        n,
 
             for (int l = 0; l < nb; l++) {
                 const float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *) b_ptr[l].d));
-                float32x4_t blockf_0 = vdupq_n_f32(0);
-                float32x4_t blockf_1 = vdupq_n_f32(0);
-                float32x4_t blockf_2 = vdupq_n_f32(0);
-                float32x4_t blockf_3 = vdupq_n_f32(0);
 
                 for (int k = 0; k < QK2_0 / QK8_0; ++k) {
                     const block_q8_0x4 * GGML_RESTRICT a_blk = a_ptr + (QK2_0 / QK8_0) * l + k;
                     const int8_t * GGML_RESTRICT b_qs = (const int8_t *) b_ptr[l].qs + 32 * k;
-                    const float32x4_t a_d = vcvt_f32_f16(vld1_f16((const float16_t *) a_blk->d));
 
                     int32x4_t sumi_0 = vdupq_n_s32(0);
                     int32x4_t sumi_1 = vdupq_n_s32(0);
@@ -5474,10 +5615,15 @@ void ggml_gemm_q2_0_4x4_q8_0(int                        n,
 
                     for (int h = 0; h < 2; ++h) {
                         const int8x16_t raw = vld1q_s8(b_qs + 16 * h);
-                        const int8x16_t w0  = vshrq_n_s8(vshlq_n_s8(raw, 6), 6);
-                        const int8x16_t w1  = vshrq_n_s8(vshlq_n_s8(raw, 4), 6);
-                        const int8x16_t w2  = vshrq_n_s8(vshlq_n_s8(raw, 2), 6);
-                        const int8x16_t w3  = vshrq_n_s8(raw, 6);
+                        const int8x16x4_t wq = ggml_q2_0_unpack(raw, tbl_lo, tbl_hi);
+
+                        const int8x16_t w0 = wq.val[0];
+
+                        const int8x16_t w1 = wq.val[1];
+
+                        const int8x16_t w2 = wq.val[2];
+
+                        const int8x16_t w3 = wq.val[3];
 
                         const int8x16_t a0 = vld1q_s8(a_blk->qs + 64 * h);
                         const int8x16_t a1 = vld1q_s8(a_blk->qs + 64 * h + 16);
@@ -5488,33 +5634,26 @@ void ggml_gemm_q2_0_4x4_q8_0(int                        n,
                         sumi_1 = vdotq_laneq_s32(sumi_1, w0, a0, 1);
                         sumi_2 = vdotq_laneq_s32(sumi_2, w0, a0, 2);
                         sumi_3 = vdotq_laneq_s32(sumi_3, w0, a0, 3);
-
                         sumi_0 = vdotq_laneq_s32(sumi_0, w1, a1, 0);
                         sumi_1 = vdotq_laneq_s32(sumi_1, w1, a1, 1);
                         sumi_2 = vdotq_laneq_s32(sumi_2, w1, a1, 2);
                         sumi_3 = vdotq_laneq_s32(sumi_3, w1, a1, 3);
-
                         sumi_0 = vdotq_laneq_s32(sumi_0, w2, a2, 0);
                         sumi_1 = vdotq_laneq_s32(sumi_1, w2, a2, 1);
                         sumi_2 = vdotq_laneq_s32(sumi_2, w2, a2, 2);
                         sumi_3 = vdotq_laneq_s32(sumi_3, w2, a2, 3);
-
                         sumi_0 = vdotq_laneq_s32(sumi_0, w3, a3, 0);
                         sumi_1 = vdotq_laneq_s32(sumi_1, w3, a3, 1);
                         sumi_2 = vdotq_laneq_s32(sumi_2, w3, a3, 2);
                         sumi_3 = vdotq_laneq_s32(sumi_3, w3, a3, 3);
                     }
 
-                    blockf_0 = vfmaq_laneq_f32(blockf_0, vcvtq_f32_s32(sumi_0), a_d, 0);
-                    blockf_1 = vfmaq_laneq_f32(blockf_1, vcvtq_f32_s32(sumi_1), a_d, 1);
-                    blockf_2 = vfmaq_laneq_f32(blockf_2, vcvtq_f32_s32(sumi_2), a_d, 2);
-                    blockf_3 = vfmaq_laneq_f32(blockf_3, vcvtq_f32_s32(sumi_3), a_d, 3);
+                    const float32x4_t a_d = vcvt_f32_f16(vld1_f16((const float16_t *) a_blk->d));
+                    sumf[0] = vfmaq_f32(sumf[0], vcvtq_f32_s32(sumi_0), vmulq_laneq_f32(b_d, a_d, 0));
+                    sumf[1] = vfmaq_f32(sumf[1], vcvtq_f32_s32(sumi_1), vmulq_laneq_f32(b_d, a_d, 1));
+                    sumf[2] = vfmaq_f32(sumf[2], vcvtq_f32_s32(sumi_2), vmulq_laneq_f32(b_d, a_d, 2));
+                    sumf[3] = vfmaq_f32(sumf[3], vcvtq_f32_s32(sumi_3), vmulq_laneq_f32(b_d, a_d, 3));
                 }
-
-                sumf[0] = vfmaq_f32(sumf[0], blockf_0, b_d);
-                sumf[1] = vfmaq_f32(sumf[1], blockf_1, b_d);
-                sumf[2] = vfmaq_f32(sumf[2], blockf_2, b_d);
-                sumf[3] = vfmaq_f32(sumf[3], blockf_3, b_d);
             }
 
             for (int m = 0; m < 4; m++) {
@@ -5546,6 +5685,8 @@ void ggml_gemm_q2_0_4x8_q8_0(int                        n,
     UNUSED(ncols_interleaved);
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
+    const int8x16_t tbl_lo = ggml_q2_0_tbl_lo();
+    const int8x16_t tbl_hi = ggml_q2_0_tbl_hi();
     for (int y = 0; y < nr / 4; y++) {
         const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + ((QK2_0 / QK8_0) * y * nb);
 
@@ -5576,10 +5717,15 @@ void ggml_gemm_q2_0_4x8_q8_0(int                        n,
 
                     for (int rp = 0; rp < 2; ++rp) {
                         const int8x16_t raw = vld1q_s8(b_qs + 16 * rp);
-                        const int8x16_t w0  = vshrq_n_s8(vshlq_n_s8(raw, 6), 6);
-                        const int8x16_t w1  = vshrq_n_s8(vshlq_n_s8(raw, 4), 6);
-                        const int8x16_t w2  = vshrq_n_s8(vshlq_n_s8(raw, 2), 6);
-                        const int8x16_t w3  = vshrq_n_s8(raw, 6);
+                        const int8x16x4_t wq = ggml_q2_0_unpack(raw, tbl_lo, tbl_hi);
+
+                        const int8x16_t w0 = wq.val[0];
+
+                        const int8x16_t w1 = wq.val[1];
+
+                        const int8x16_t w2 = wq.val[2];
+
+                        const int8x16_t w3 = wq.val[3];
 
                         acc[0 + rp] = vmmlaq_s32(acc[0 + rp], vld1q_s8(a_blk->qs +  0), w0);
                         acc[2 + rp] = vmmlaq_s32(acc[2 + rp], vld1q_s8(a_blk->qs + 16), w0);
