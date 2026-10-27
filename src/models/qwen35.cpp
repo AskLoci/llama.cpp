@@ -1,6 +1,28 @@
 #include "models.h"
 #include "llama-memory-recurrent.h"
 
+// Split the jointly normalized head groups without changing their values. The
+// fused GDN accepts these strided views; its unfused paths require packed rows.
+static std::pair<ggml_tensor *, ggml_tensor *> split_normalized_qk(
+        ggml_context * ctx,
+        ggml_tensor * qk,
+        bool fused_ar,
+        bool fused_ch) {
+    GGML_ASSERT(qk->ne[1] > 0 && qk->ne[1] % 2 == 0);
+    const int64_t heads = qk->ne[1] / 2;
+    ggml_tensor * q = ggml_view_4d(ctx, qk, qk->ne[0], heads, qk->ne[2], qk->ne[3],
+            qk->nb[1], qk->nb[2], qk->nb[3], 0);
+    ggml_tensor * k = ggml_view_4d(ctx, qk, qk->ne[0], heads, qk->ne[2], qk->ne[3],
+            qk->nb[1], qk->nb[2], qk->nb[3], heads * qk->nb[1]);
+    const bool fused = qk->ne[2] == 1 ? fused_ar : fused_ch;
+    if (!fused) {
+        q = ggml_cont(ctx, q);
+        k = ggml_cont(ctx, k);
+    }
+    return {q, k};
+}
+
+#ifndef LLAMA_QWEN35_LAYOUT_TEST
 void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
@@ -543,10 +565,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     qk_conv = ggml_l2_norm(ctx0, qk_conv, eps_norm);
     cb(qk_conv, "qk_conv_l2", il);
 
-    q_conv = ggml_view_4d(ctx0, qk_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-            qk_conv->nb[1], qk_conv->nb[2], qk_conv->nb[3], 0);
-    k_conv = ggml_view_4d(ctx0, qk_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-            qk_conv->nb[1], qk_conv->nb[2], qk_conv->nb[3], num_k_heads * qk_conv->nb[1]);
+    auto normalized_qk = split_normalized_qk(ctx0, qk_conv, cparams.fused_gdn_ar, cparams.fused_gdn_ch);
+    q_conv = normalized_qk.first;
+    k_conv = normalized_qk.second;
 
     //q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
     //k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
@@ -783,3 +804,90 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     res->t_logits = cur;
     ggml_build_forward_expand(gf, cur);
 }
+#else
+#include "ggml-cpp.h"
+#include "ggml-cpu.h"
+
+#include <array>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+static void test_normalized_qk_layout(int64_t tokens, int64_t sequences, bool fused_ar, bool fused_ch) {
+    constexpr int64_t width = 8;
+    constexpr int64_t heads = 3;
+    constexpr float epsilon = 1e-6f;
+    constexpr float scale = 0.25f;
+    const bool fused = tokens == 1 ? fused_ar : fused_ch;
+    std::printf("Qwen35 Q/K layout: tokens=%lld sequences=%lld fused_ar=%d fused_ch=%d\n",
+            (long long) tokens, (long long) sequences, fused_ar, fused_ch);
+    std::fflush(stdout);
+
+    ggml_context_ptr ctx(ggml_init({1024 * 1024, nullptr, true}));
+    GGML_ASSERT(ctx);
+    ggml_backend_ptr backend(ggml_backend_cpu_init());
+    GGML_ASSERT(backend);
+    ggml_tensor * input = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, width, heads * 2, tokens, sequences);
+    ggml_tensor * joint = ggml_l2_norm(ctx.get(), input, epsilon);
+    const auto actual = split_normalized_qk(ctx.get(), joint, fused_ar, fused_ch);
+    const std::array<ggml_tensor *, 2> parts = {actual.first, actual.second};
+    std::array<ggml_tensor *, 2> output;
+    std::array<ggml_tensor *, 2> reference;
+    ggml_cgraph * graph = ggml_new_graph(ctx.get());
+    for (size_t i = 0; i < parts.size(); ++i) {
+        ggml_tensor * separate = ggml_view_4d(ctx.get(), input, width, heads, tokens, sequences,
+                input->nb[1], input->nb[2], input->nb[3], i * heads * input->nb[1]);
+        separate = ggml_l2_norm(ctx.get(), separate, epsilon);
+        if (fused) {
+            GGML_ASSERT(parts[i]->op == GGML_OP_VIEW && parts[i]->view_src == joint);
+            GGML_ASSERT(parts[i]->nb[2] == 2 * parts[i]->nb[1] * heads);
+            output[i] = ggml_cont(ctx.get(), parts[i]);
+            reference[i] = separate;
+        } else {
+            // The real AR and CH fallbacks consume Q directly in SCALE. Build
+            // that boundary before checking layout so the regression aborts there.
+            output[i] = ggml_scale(ctx.get(), parts[i], scale);
+            reference[i] = ggml_scale(ctx.get(), separate, scale);
+            GGML_ASSERT(ggml_is_contiguous(parts[i]));
+        }
+        ggml_build_forward_expand(graph, output[i]);
+        ggml_build_forward_expand(graph, reference[i]);
+    }
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend.get()));
+    GGML_ASSERT(buffer);
+    std::vector<float> values(ggml_nelements(input));
+    for (size_t i = 0; i < values.size(); ++i) {
+        values[i] = (float(int(i % 29) - 14) + 0.125f) / 7.0f;
+    }
+    ggml_backend_tensor_set(input, values.data(), 0, values.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_graph_compute(backend.get(), graph) == GGML_STATUS_SUCCESS);
+    for (size_t i = 0; i < output.size(); ++i) {
+        std::vector<float> got(ggml_nelements(output[i]));
+        std::vector<float> expected(got.size());
+        ggml_backend_tensor_get(output[i], got.data(), 0, got.size() * sizeof(float));
+        ggml_backend_tensor_get(reference[i], expected.data(), 0, expected.size() * sizeof(float));
+        for (size_t j = 0; j < got.size(); ++j) {
+            GGML_ASSERT(std::isfinite(got[j]) && std::abs(got[j] - expected[j]) <= 1e-6f);
+        }
+    }
+}
+
+int main(int argc, char ** argv) {
+    GGML_ASSERT(argc == 1 || (argc == 2 &&
+            (std::strcmp(argv[1], "ar") == 0 || std::strcmp(argv[1], "ch") == 0)));
+    for (int64_t tokens : {1, 16}) {
+        if (argc == 2 && tokens != (std::strcmp(argv[1], "ar") == 0 ? 1 : 16)) {
+            continue;
+        }
+        for (int64_t sequences : {1, 2}) {
+            for (bool fused_ar : {false, true}) {
+                for (bool fused_ch : {false, true}) {
+                    test_normalized_qk_layout(tokens, sequences, fused_ar, fused_ch);
+                }
+            }
+        }
+    }
+    std::puts("Qwen35 Q/K layout and CPU graph checks passed");
+    return 0;
+}
+#endif
