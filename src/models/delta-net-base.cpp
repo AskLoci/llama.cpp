@@ -1,3 +1,13 @@
+#include "ggml.h"
+
+// Write one attention chunk without requiring its producer and destination to
+// share a backend. Preserve every value outside the selected chunk.
+static ggml_tensor * write_delta_net_chunk(
+        ggml_context * ctx, ggml_tensor * values, ggml_tensor * chunk, int64_t index) {
+    return ggml_set(ctx, values, chunk, values->nb[1], values->nb[2], values->nb[3], index * values->nb[2]);
+}
+
+#ifndef LLAMA_DELTA_NET_SET_TEST
 #include "models.h"
 
 #include "llama-impl.h"
@@ -259,7 +269,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
         ggml_tensor * o_ch = ggml_add(ctx0, attn_inter, v_attn);
         cb(o_ch, "dnet_add_ch_attn_out", il);
 
-        v = ggml_set_inplace(ctx0, v, o_ch, v->nb[1], v->nb[2], v->nb[3], chunk * v->nb[2]);
+        v = write_delta_net_chunk(ctx0, v, o_ch, chunk);
 
         // kgdmulvnew = (key_gdiff).transpose(-1, -2) @ v_new
         // TODO: head broadcast might not work here - probably will need a transpose
@@ -646,3 +656,110 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
 
     return output;
 }
+#else
+#include "ggml-backend.h"
+#include "ggml-cpu.h"
+#ifdef LLAMA_DELTA_NET_METAL_TEST
+#include "ggml-metal.h"
+#endif
+
+#include <cmath>
+#include <cstdio>
+#include <vector>
+
+static void test_delta_net_chunk(
+        ggml_backend_t destination, ggml_backend_t cpu, int chunks, int heads, int sequences, int selected) {
+    constexpr int width = 8, chunk_size = 64;
+    const int groups = heads * sequences;
+    ggml_context * ctx = ggml_init({1024 * 1024, nullptr, true});
+    GGML_ASSERT(ctx);
+    ggml_backend_t backends[] = {destination, cpu};
+    ggml_backend_sched_t sched = ggml_backend_sched_new(backends, nullptr,
+            destination == cpu ? 1 : 2, GGML_DEFAULT_GRAPH_SIZE, false, true);
+    GGML_ASSERT(sched);
+    ggml_tensor * identity = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, width, width);
+    ggml_tensor * input = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, chunk_size, chunks, groups);
+    ggml_tensor * patch = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, chunk_size, 1, groups);
+    ggml_set_input(identity);
+    ggml_set_input(input);
+    ggml_set_input(patch);
+    ggml_tensor * values = ggml_mul_mat(ctx, identity, input);
+    ggml_tensor * update = ggml_scale(ctx, patch, 2.0f);
+    ggml_tensor * result = write_delta_net_chunk(ctx, values, update, selected);
+    ggml_tensor * output = ggml_cont(ctx, result);
+    ggml_set_output(output);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
+
+    // Model the fallback split: matrix multiplication on CPU, chunk output and
+    // writing on the accelerator. The original in-place SET retained a CPU
+    // view_src after the scheduler copied src[0] to the destination backend.
+    ggml_backend_sched_set_tensor_backend(sched, values, cpu);
+    ggml_backend_sched_set_tensor_backend(sched, update, destination);
+    ggml_backend_sched_set_tensor_backend(sched, result, destination);
+    ggml_backend_sched_set_tensor_backend(sched, output, destination);
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched, graph));
+    std::printf("DeltaNet chunk write: backend=%s chunks=%d heads=%d sequences=%d selected=%d\n",
+            ggml_backend_name(destination), chunks, heads, sequences, selected);
+    std::fflush(stdout);
+    ggml_backend_buffer_t buffer = result->view_src ? result->view_src->buffer : result->buffer;
+    GGML_ASSERT(ggml_backend_supports_buft(destination, ggml_backend_buffer_get_type(buffer)));
+
+    std::vector<float> eye(width * width, 0);
+    for (int i = 0; i < width; ++i) {
+        eye[i * width + i] = 1;
+    }
+    std::vector<float> original(ggml_nelements(input));
+    std::vector<float> replacement(ggml_nelements(patch));
+    for (size_t i = 0; i < original.size(); ++i) {
+        original[i] = float(i % 31) / 8.0f;
+    }
+    for (size_t i = 0; i < replacement.size(); ++i) {
+        replacement[i] = float(i % 17 + 100) / 8.0f;
+    }
+    ggml_backend_tensor_set(identity, eye.data(), 0, eye.size() * sizeof(float));
+    ggml_backend_tensor_set(input, original.data(), 0, original.size() * sizeof(float));
+    ggml_backend_tensor_set(patch, replacement.data(), 0, replacement.size() * sizeof(float));
+    GGML_ASSERT(ggml_backend_sched_graph_compute(sched, graph) == GGML_STATUS_SUCCESS);
+    std::vector<float> got(original.size());
+    ggml_backend_tensor_get(output, got.data(), 0, got.size() * sizeof(float));
+    for (int group = 0; group < groups; ++group) {
+        for (int chunk = 0; chunk < chunks; ++chunk) {
+            for (int pos = 0; pos < width * chunk_size; ++pos) {
+                const size_t index = (group * chunks + chunk) * width * chunk_size + pos;
+                const float expected = chunk == selected
+                        ? replacement[group * width * chunk_size + pos] * 2 : original[index];
+                GGML_ASSERT(std::isfinite(got[index]) && std::abs(got[index] - expected) <= 1e-6f);
+            }
+        }
+    }
+    ggml_backend_sched_free(sched);
+    ggml_free(ctx);
+}
+
+int main() {
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    GGML_ASSERT(cpu);
+    std::vector<ggml_backend_t> backends = {cpu};
+#ifdef LLAMA_DELTA_NET_METAL_TEST
+    if (ggml_backend_t metal = ggml_backend_metal_init()) {
+        backends.push_back(metal);
+    }
+#endif
+    for (ggml_backend_t backend : backends) {
+        for (int chunks : {1, 2}) {
+            for (int heads : {1, 2}) {
+                for (int sequences : {1, 2}) {
+                    for (int selected = 0; selected < chunks; ++selected) {
+                        test_delta_net_chunk(backend, cpu, chunks, heads, sequences, selected);
+                    }
+                }
+            }
+        }
+    }
+    for (ggml_backend_t backend : backends) {
+        ggml_backend_free(backend);
+    }
+    return 0;
+}
+#endif

@@ -123,6 +123,13 @@ llama_build_and_test(../src/models/qwen35.cpp NAME test-qwen35-layout)
 target_compile_definitions(test-qwen35-layout PRIVATE LLAMA_QWEN35_LAYOUT_TEST)
 target_include_directories(test-qwen35-layout PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
+llama_build_and_test(../src/models/delta-net-base.cpp NAME test-delta-net-chunk-write)
+target_compile_definitions(test-delta-net-chunk-write PRIVATE LLAMA_DELTA_NET_SET_TEST)
+if (GGML_METAL)
+    target_compile_definitions(test-delta-net-chunk-write PRIVATE LLAMA_DELTA_NET_METAL_TEST)
+    target_link_libraries(test-delta-net-chunk-write PRIVATE ggml-metal)
+endif()
+
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-bert-bge          ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-bert-bge.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-command-r         ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-command-r.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-deepseek-coder    ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-deepseek-coder.gguf)
