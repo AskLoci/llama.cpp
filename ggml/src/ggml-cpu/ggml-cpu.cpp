@@ -96,6 +96,21 @@ static bool ggml_backend_cpu_is_extra_buffer_type(ggml_backend_buffer_type_t buf
 
 // CPU backend - backend (stream)
 
+#if defined(__ANDROID__) && !defined(GGML_USE_OPENMP)
+#include <array>
+#include <cerrno>
+#include <sched.h>
+#include <sys/resource.h>
+
+struct ggml_backend_cpu_resident_pool {
+    ggml_threadpool_t threadpool = NULL;
+    int               n_threads  = 0;
+    int               nice       = 0;
+    cpu_set_t         affinity   = {};
+    uint64_t          used       = 0;
+};
+#endif
+
 struct ggml_backend_cpu_context {
     int                 n_threads;
     ggml_threadpool_t   threadpool;
@@ -107,7 +122,55 @@ struct ggml_backend_cpu_context {
     void *              abort_callback_data;
 
     bool                use_ref;  // use reference implementation
+#if defined(__ANDROID__) && !defined(GGML_USE_OPENMP)
+    std::array<ggml_backend_cpu_resident_pool, 4> resident{};
+    ggml_threadpool_t resident_active = NULL;
+    uint64_t          resident_uses   = 0;
+#endif
 };
+
+#if defined(__ANDROID__) && !defined(GGML_USE_OPENMP)
+static ggml_threadpool_t ggml_backend_cpu_resident_threadpool(struct ggml_backend_cpu_context * ctx) {
+    if (ctx->n_threads < 2) {
+        return NULL;
+    }
+    ggml_backend_cpu_resident_pool wanted;
+    wanted.n_threads = ctx->n_threads;
+    errno = 0;
+    wanted.nice = getpriority(PRIO_PROCESS, 0);
+    if (errno != 0 || sched_getaffinity(0, sizeof(wanted.affinity), &wanted.affinity) != 0) {
+        return NULL;
+    }
+    ggml_backend_cpu_resident_pool * slot = NULL;
+    for (auto & pool : ctx->resident) {
+        if (pool.threadpool != NULL && pool.n_threads == wanted.n_threads && pool.nice == wanted.nice &&
+            CPU_EQUAL(&pool.affinity, &wanted.affinity)) {
+            slot = &pool;
+        }
+    }
+    if (slot == NULL) {
+        slot = &ctx->resident[0];
+        for (auto & pool : ctx->resident) {
+            if (pool.used < slot->used) {
+                slot = &pool;
+            }
+        }
+        if (slot->threadpool == ctx->resident_active) {
+            ctx->resident_active = NULL;
+        }
+        ggml_threadpool_free(slot->threadpool);
+        struct ggml_threadpool_params params = ggml_threadpool_params_default(wanted.n_threads);
+        wanted.threadpool = ggml_threadpool_new(&params);
+        *slot = wanted;
+    }
+    if (ctx->resident_active != NULL && ctx->resident_active != slot->threadpool) {
+        ggml_threadpool_pause(ctx->resident_active);
+    }
+    ctx->resident_active = slot->threadpool;
+    slot->used = ++ctx->resident_uses;
+    return slot->threadpool;
+}
+#endif
 
 static const char * ggml_backend_cpu_get_name(ggml_backend_t backend) {
     return "CPU";
@@ -117,6 +180,11 @@ static const char * ggml_backend_cpu_get_name(ggml_backend_t backend) {
 
 static void ggml_backend_cpu_free(ggml_backend_t backend) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
+#if defined(__ANDROID__) && !defined(GGML_USE_OPENMP)
+    for (auto & pool : cpu_ctx->resident) {
+        ggml_threadpool_free(pool.threadpool);
+    }
+#endif
     delete[] cpu_ctx->work_data;
     delete cpu_ctx;
     delete backend;
@@ -170,7 +238,13 @@ static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backend_t backe
 static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
 
-    struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads, cpu_ctx->threadpool);
+    ggml_threadpool_t threadpool = cpu_ctx->threadpool;
+#if defined(__ANDROID__) && !defined(GGML_USE_OPENMP)
+    if (threadpool == NULL) {
+        threadpool = ggml_backend_cpu_resident_threadpool(cpu_ctx);
+    }
+#endif
+    struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads, threadpool);
 
     if (cpu_ctx->work_size < cplan.work_size) {
         delete[] cpu_ctx->work_data;
