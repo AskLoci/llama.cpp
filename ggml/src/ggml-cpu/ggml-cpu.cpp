@@ -130,8 +130,16 @@ struct ggml_backend_cpu_context {
 };
 
 #if defined(__ANDROID__) && !defined(GGML_USE_OPENMP)
+static void ggml_backend_cpu_resident_pause(struct ggml_backend_cpu_context * ctx, ggml_threadpool_t keep) {
+    if (ctx->resident_active != NULL && ctx->resident_active != keep) {
+        ggml_threadpool_pause(ctx->resident_active);
+        ctx->resident_active = NULL;
+    }
+}
+
 static ggml_threadpool_t ggml_backend_cpu_resident_threadpool(struct ggml_backend_cpu_context * ctx) {
     if (ctx->n_threads < 2) {
+        ggml_backend_cpu_resident_pause(ctx, NULL);
         return NULL;
     }
     ggml_backend_cpu_resident_pool wanted;
@@ -139,6 +147,7 @@ static ggml_threadpool_t ggml_backend_cpu_resident_threadpool(struct ggml_backen
     errno = 0;
     wanted.nice = getpriority(PRIO_PROCESS, 0);
     if (errno != 0 || sched_getaffinity(0, sizeof(wanted.affinity), &wanted.affinity) != 0) {
+        ggml_backend_cpu_resident_pause(ctx, NULL);
         return NULL;
     }
     ggml_backend_cpu_resident_pool * slot = NULL;
@@ -148,6 +157,7 @@ static ggml_threadpool_t ggml_backend_cpu_resident_threadpool(struct ggml_backen
             slot = &pool;
         }
     }
+    ggml_backend_cpu_resident_pause(ctx, slot != NULL ? slot->threadpool : NULL);
     if (slot == NULL) {
         slot = &ctx->resident[0];
         for (auto & pool : ctx->resident) {
@@ -155,16 +165,13 @@ static ggml_threadpool_t ggml_backend_cpu_resident_threadpool(struct ggml_backen
                 slot = &pool;
             }
         }
-        if (slot->threadpool == ctx->resident_active) {
-            ctx->resident_active = NULL;
-        }
         ggml_threadpool_free(slot->threadpool);
         struct ggml_threadpool_params params = ggml_threadpool_params_default(wanted.n_threads);
+        for (int cpu = 0; cpu < GGML_MAX_N_THREADS && cpu < CPU_SETSIZE; cpu++) {
+            params.cpumask[cpu] = CPU_ISSET(cpu, &wanted.affinity);
+        }
         wanted.threadpool = ggml_threadpool_new(&params);
         *slot = wanted;
-    }
-    if (ctx->resident_active != NULL && ctx->resident_active != slot->threadpool) {
-        ggml_threadpool_pause(ctx->resident_active);
     }
     ctx->resident_active = slot->threadpool;
     slot->used = ++ctx->resident_uses;
@@ -242,6 +249,8 @@ static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, s
 #if defined(__ANDROID__) && !defined(GGML_USE_OPENMP)
     if (threadpool == NULL) {
         threadpool = ggml_backend_cpu_resident_threadpool(cpu_ctx);
+    } else {
+        ggml_backend_cpu_resident_pause(cpu_ctx, NULL);
     }
 #endif
     struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads, threadpool);

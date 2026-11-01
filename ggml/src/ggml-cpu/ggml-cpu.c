@@ -3266,6 +3266,9 @@ static thread_ret_t ggml_graph_compute_secondary_thread(void* data) {
 
     while (true) {
         // Check if we need to sleep
+#if defined(__ANDROID__)
+        bool resumed = false;
+#endif
         while (threadpool->pause) {
             GGML_PRINT_DEBUG("thread #%d inside pause loop\n", state->ith);
             ggml_mutex_lock_shared(&threadpool->mutex);
@@ -3274,10 +3277,19 @@ static thread_ret_t ggml_graph_compute_secondary_thread(void* data) {
             }
             GGML_PRINT_DEBUG("thread #%d resuming after wait\n", state->ith);
             ggml_mutex_unlock_shared(&threadpool->mutex);
+#if defined(__ANDROID__)
+            resumed = true;
+#endif
         }
 
         // This needs to be checked for after the cond_wait
         if (threadpool->stop) break;
+
+#if defined(__ANDROID__)
+        if (resumed && ggml_thread_cpumask_is_valid(state->cpumask)) {
+            ggml_thread_apply_affinity(state->cpumask);
+        }
+#endif
 
         // Check if there is new work
         // The main thread is the only one that can dispatch new work
