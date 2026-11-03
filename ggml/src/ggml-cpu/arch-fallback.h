@@ -61,6 +61,8 @@
 #define ggml_gemv_q8_0_4x8_q8_0_generic ggml_gemv_q8_0_4x8_q8_0
 #define ggml_gemv_q1_0_4x4_q8_0_generic ggml_gemv_q1_0_4x4_q8_0
 #define ggml_gemv_q1_0_4x8_q8_0_generic ggml_gemv_q1_0_4x8_q8_0
+#define ggml_gemv_q2_0_4x4_q8_0_generic ggml_gemv_q2_0_4x4_q8_0
+#define ggml_gemv_q2_0_4x8_q8_0_generic ggml_gemv_q2_0_4x8_q8_0
 #define ggml_gemv_pq2_0_4x8_q8_0_generic ggml_gemv_pq2_0_4x8_q8_0
 #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
 #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
@@ -80,6 +82,8 @@
 #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
 #define ggml_gemm_q1_0_4x4_q8_0_generic ggml_gemm_q1_0_4x4_q8_0
 #define ggml_gemm_q1_0_4x8_q8_0_generic ggml_gemm_q1_0_4x8_q8_0
+#define ggml_gemm_q2_0_4x4_q8_0_generic ggml_gemm_q2_0_4x4_q8_0
+#define ggml_gemm_q2_0_4x8_q8_0_generic ggml_gemm_q2_0_4x8_q8_0
 #define ggml_gemm_pq2_0_4x8_q8_0_generic ggml_gemm_pq2_0_4x8_q8_0
 #elif defined(__aarch64__) || defined(__arm__) || defined(_M_ARM) || defined(_M_ARM64)
 // repack.cpp
@@ -111,6 +115,8 @@
 #define ggml_gemv_q8_0_4x4_q8_0_generic ggml_gemv_q8_0_4x4_q8_0
 #define ggml_gemv_q8_0_4x8_q8_0_generic ggml_gemv_q8_0_4x8_q8_0
 #define ggml_gemv_q1_0_4x4_q8_0_generic ggml_gemv_q1_0_4x4_q8_0
+#define ggml_gemv_q2_0_4x4_q8_0_generic ggml_gemv_q2_0_4x4_q8_0
+#define ggml_gemv_q2_0_4x8_q8_0_generic ggml_gemv_q2_0_4x8_q8_0
 #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
 #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
 #define ggml_gemm_q4_K_8x4_q8_K_generic ggml_gemm_q4_K_8x4_q8_K
@@ -123,6 +129,8 @@
 #define ggml_gemm_q8_0_4x4_q8_0_generic ggml_gemm_q8_0_4x4_q8_0
 #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
 #define ggml_gemm_q1_0_4x4_q8_0_generic ggml_gemm_q1_0_4x4_q8_0
+#define ggml_gemm_q2_0_4x4_q8_0_generic ggml_gemm_q2_0_4x4_q8_0
+#define ggml_gemm_q2_0_4x8_q8_0_generic ggml_gemm_q2_0_4x8_q8_0
 #elif defined(__POWERPC__) || defined(__powerpc__)
 // PTQ1_0 currently has only the generic vec_dot; alias it here until a SIMD version lands
 #define ggml_vec_dot_ptq1_0_q8_0_generic ggml_vec_dot_ptq1_0_q8_0
@@ -161,6 +169,8 @@
 #define ggml_gemv_q8_0_4x8_q8_0_generic ggml_gemv_q8_0_4x8_q8_0
 #define ggml_gemv_q1_0_4x4_q8_0_generic ggml_gemv_q1_0_4x4_q8_0
 #define ggml_gemv_q1_0_4x8_q8_0_generic ggml_gemv_q1_0_4x8_q8_0
+#define ggml_gemv_q2_0_4x4_q8_0_generic ggml_gemv_q2_0_4x4_q8_0
+#define ggml_gemv_q2_0_4x8_q8_0_generic ggml_gemv_q2_0_4x8_q8_0
 #define ggml_gemv_pq2_0_4x8_q8_0_generic ggml_gemv_pq2_0_4x8_q8_0
 #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
 #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
@@ -180,6 +190,8 @@
 #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
 #define ggml_gemm_q1_0_4x4_q8_0_generic ggml_gemm_q1_0_4x4_q8_0
 #define ggml_gemm_q1_0_4x8_q8_0_generic ggml_gemm_q1_0_4x8_q8_0
+#define ggml_gemm_q2_0_4x4_q8_0_generic ggml_gemm_q2_0_4x4_q8_0
+#define ggml_gemm_q2_0_4x8_q8_0_generic ggml_gemm_q2_0_4x8_q8_0
 #define ggml_gemm_pq2_0_4x8_q8_0_generic ggml_gemm_pq2_0_4x8_q8_0
 #elif defined(__loongarch64)
 // PTQ1_0 currently has only the generic vec_dot; alias it here until a SIMD version lands
@@ -219,6 +231,8 @@
 #define ggml_gemv_q8_0_4x8_q8_0_generic ggml_gemv_q8_0_4x8_q8_0
 #define ggml_gemv_q1_0_4x4_q8_0_generic ggml_gemv_q1_0_4x4_q8_0
 #define ggml_gemv_q1_0_4x8_q8_0_generic ggml_gemv_q1_0_4x8_q8_0
+#define ggml_gemv_q2_0_4x4_q8_0_generic ggml_gemv_q2_0_4x4_q8_0
+#define ggml_gemv_q2_0_4x8_q8_0_generic ggml_gemv_q2_0_4x8_q8_0
 #define ggml_gemv_pq2_0_4x8_q8_0_generic ggml_gemv_pq2_0_4x8_q8_0
 #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
 #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
@@ -238,6 +252,8 @@
 #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
 #define ggml_gemm_q1_0_4x4_q8_0_generic ggml_gemm_q1_0_4x4_q8_0
 #define ggml_gemm_q1_0_4x8_q8_0_generic ggml_gemm_q1_0_4x8_q8_0
+#define ggml_gemm_q2_0_4x4_q8_0_generic ggml_gemm_q2_0_4x4_q8_0
+#define ggml_gemm_q2_0_4x8_q8_0_generic ggml_gemm_q2_0_4x8_q8_0
 #define ggml_gemm_pq2_0_4x8_q8_0_generic ggml_gemm_pq2_0_4x8_q8_0
 #elif defined(__riscv)
 // PTQ1_0 currently has only the generic vec_dot; alias it here until a SIMD version lands
@@ -271,6 +287,8 @@
 #define ggml_gemv_q8_0_4x8_q8_0_generic ggml_gemv_q8_0_4x8_q8_0
 #define ggml_gemv_q1_0_4x4_q8_0_generic ggml_gemv_q1_0_4x4_q8_0
 #define ggml_gemv_q1_0_4x8_q8_0_generic ggml_gemv_q1_0_4x8_q8_0
+#define ggml_gemv_q2_0_4x4_q8_0_generic ggml_gemv_q2_0_4x4_q8_0
+#define ggml_gemv_q2_0_4x8_q8_0_generic ggml_gemv_q2_0_4x8_q8_0
 #define ggml_gemv_pq2_0_4x8_q8_0_generic ggml_gemv_pq2_0_4x8_q8_0
 #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
 #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
@@ -289,6 +307,8 @@
 #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
 #define ggml_gemm_q1_0_4x4_q8_0_generic ggml_gemm_q1_0_4x4_q8_0
 #define ggml_gemm_q1_0_4x8_q8_0_generic ggml_gemm_q1_0_4x8_q8_0
+#define ggml_gemm_q2_0_4x4_q8_0_generic ggml_gemm_q2_0_4x4_q8_0
+#define ggml_gemm_q2_0_4x8_q8_0_generic ggml_gemm_q2_0_4x8_q8_0
 #define ggml_gemm_pq2_0_4x8_q8_0_generic ggml_gemm_pq2_0_4x8_q8_0
 #elif defined(__s390x__)
 // PTQ1_0 currently has only the generic vec_dot; alias it here until a SIMD version lands
@@ -334,6 +354,8 @@
 #define ggml_gemv_q8_0_4x8_q8_0_generic ggml_gemv_q8_0_4x8_q8_0
 #define ggml_gemv_q1_0_4x4_q8_0_generic ggml_gemv_q1_0_4x4_q8_0
 #define ggml_gemv_q1_0_4x8_q8_0_generic ggml_gemv_q1_0_4x8_q8_0
+#define ggml_gemv_q2_0_4x4_q8_0_generic ggml_gemv_q2_0_4x4_q8_0
+#define ggml_gemv_q2_0_4x8_q8_0_generic ggml_gemv_q2_0_4x8_q8_0
 #define ggml_gemv_pq2_0_4x8_q8_0_generic ggml_gemv_pq2_0_4x8_q8_0
 #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
 #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
@@ -353,6 +375,8 @@
 #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
 #define ggml_gemm_q1_0_4x4_q8_0_generic ggml_gemm_q1_0_4x4_q8_0
 #define ggml_gemm_q1_0_4x8_q8_0_generic ggml_gemm_q1_0_4x8_q8_0
+#define ggml_gemm_q2_0_4x4_q8_0_generic ggml_gemm_q2_0_4x4_q8_0
+#define ggml_gemm_q2_0_4x8_q8_0_generic ggml_gemm_q2_0_4x8_q8_0
 #define ggml_gemm_pq2_0_4x8_q8_0_generic ggml_gemm_pq2_0_4x8_q8_0
 #elif defined(__wasm__)
 // PTQ1_0 currently has only the generic vec_dot; alias it here until a SIMD version lands
@@ -399,6 +423,8 @@
 #define ggml_gemv_q8_0_4x8_q8_0_generic ggml_gemv_q8_0_4x8_q8_0
 #define ggml_gemv_q1_0_4x4_q8_0_generic ggml_gemv_q1_0_4x4_q8_0
 #define ggml_gemv_q1_0_4x8_q8_0_generic ggml_gemv_q1_0_4x8_q8_0
+#define ggml_gemv_q2_0_4x4_q8_0_generic ggml_gemv_q2_0_4x4_q8_0
+#define ggml_gemv_q2_0_4x8_q8_0_generic ggml_gemv_q2_0_4x8_q8_0
 #define ggml_gemv_pq2_0_4x8_q8_0_generic ggml_gemv_pq2_0_4x8_q8_0
 #define ggml_gemm_q4_0_4x4_q8_0_generic ggml_gemm_q4_0_4x4_q8_0
 #define ggml_gemm_q4_0_4x8_q8_0_generic ggml_gemm_q4_0_4x8_q8_0
@@ -418,5 +444,7 @@
 #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
 #define ggml_gemm_q1_0_4x4_q8_0_generic ggml_gemm_q1_0_4x4_q8_0
 #define ggml_gemm_q1_0_4x8_q8_0_generic ggml_gemm_q1_0_4x8_q8_0
+#define ggml_gemm_q2_0_4x4_q8_0_generic ggml_gemm_q2_0_4x4_q8_0
+#define ggml_gemm_q2_0_4x8_q8_0_generic ggml_gemm_q2_0_4x8_q8_0
 #define ggml_gemm_pq2_0_4x8_q8_0_generic ggml_gemm_pq2_0_4x8_q8_0
 #endif
