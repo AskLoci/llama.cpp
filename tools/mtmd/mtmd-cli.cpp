@@ -203,7 +203,7 @@ struct mtmd_cli_context {
     }
 
     bool load_media(const std::string & fname) {
-        auto res = mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str(), false, init_opt);
+        auto res = mtmd_helper_bitmap_init_from_file_opt(ctx_vision.get(), fname.c_str(), false, init_opt);
         if (!res.bitmap) {
             return false;
         }
@@ -260,7 +260,7 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
 
 // feed an audio file to a realtime model chunk by chunk, printing the transcript as it is produced
 static int run_audio_stream(mtmd_cli_context & ctx, const std::string & fname, int n_predict) {
-    auto res = mtmd_helper_bitmap_init_from_file(ctx.ctx_vision.get(), fname.c_str(), false, ctx.init_opt);
+    auto res = mtmd_helper_bitmap_init_from_file_opt(ctx.ctx_vision.get(), fname.c_str(), false, ctx.init_opt);
     if (!res.bitmap) {
         return 1; // error is already printed by libmtmd
     }

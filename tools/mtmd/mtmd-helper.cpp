@@ -370,7 +370,7 @@ static mtmd_bitmap * decode_webp_with_ffmpeg(const mtmd_context * mctx, const un
 static void mtmd_helper_video_set_id(mtmd_helper_video * vctx, const std::string & id);
 #endif
 
-mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(const mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder,
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf_opt(const mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder,
                                                             mtmd_helper_init_opt opt) {
     // calculate the hash if needed
     std::string id;
@@ -457,7 +457,7 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(const mtmd_context *
     return {nullptr, nullptr};
 }
 
-mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(const mtmd_context * ctx, const char * fname, bool placeholder,
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file_opt(const mtmd_context * ctx, const char * fname, bool placeholder,
                                                              mtmd_helper_init_opt opt) {
 #ifdef _WIN32
     int wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, NULL, 0);
@@ -499,7 +499,7 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(const mtmd_context 
         return {nullptr, nullptr};
     }
 
-    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder, opt);
+    return mtmd_helper_bitmap_init_from_buf_opt(ctx, buf.data(), buf.size(), placeholder, opt);
 }
 
 //
@@ -862,6 +862,14 @@ mtmd_helper_video_init_params mtmd_helper_video_init_params_default() {
         /* ffmpeg_bin_dir         */ nullptr,
         /* timestamp_interval_ms  */ 5000,
     };
+}
+
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(const mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder) {
+    return mtmd_helper_bitmap_init_from_buf_opt(ctx, buf, len, placeholder, mtmd_helper_init_opt_default());
+}
+
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(const mtmd_context * ctx, const char * fname, bool placeholder) {
+    return mtmd_helper_bitmap_init_from_file_opt(ctx, fname, placeholder, mtmd_helper_init_opt_default());
 }
 
 mtmd_helper_init_opt mtmd_helper_init_opt_default() {

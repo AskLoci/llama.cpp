@@ -57,6 +57,12 @@ struct mtmd_helper_bitmap_wrapper {
 MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(
                     const mtmd_context * ctx,
                     const char * fname,
+                    bool placeholder);
+
+// the same, with options; this base keeps the three-argument form above for llama-cpp-2
+MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file_opt(
+                    const mtmd_context * ctx,
+                    const char * fname,
                     bool placeholder,
                     struct mtmd_helper_init_opt opt);
 
@@ -72,6 +78,11 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(
 // returns nullptr on failure
 // this function is thread-safe
 MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(
+                    const mtmd_context * ctx,
+                    const unsigned char * buf, size_t len,
+                    bool placeholder);
+
+MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf_opt(
                     const mtmd_context * ctx,
                     const unsigned char * buf, size_t len,
                     bool placeholder,
