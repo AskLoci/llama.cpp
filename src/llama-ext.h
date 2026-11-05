@@ -137,6 +137,12 @@ LLAMA_API bool            llama_model_has_dspark_markov_head(const struct llama_
 // caller must allocate enough memory for out before calling
 LLAMA_API uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out);
 
+// retrieves the rows of the given tokens in F32 format (n_tokens * n_embd), returns the number of elements written or 0 on error
+LLAMA_API uint32_t llama_model_get_tok_embd_rows(const struct llama_model * model, const llama_token * tokens, uint32_t n_tokens, float * out);
+
+// tokens of delay between the audio and the text of a realtime transcription model, none on this base
+LLAMA_API uint32_t llama_model_n_tokens_delay(const struct llama_model * model);
+
 //
 // multi-layer hidden-state tap (EAGLE3 / dspark target-feature reuse)
 //
